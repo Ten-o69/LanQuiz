@@ -282,6 +282,7 @@ class QuizServer(
     private suspend fun broadcastPlayers() {
         val dto = mutex.withLock { players.values.map { PlayerDto(it.id, it.name) } }
         broadcast(WsMsg.Players(dto))
+        onHostEvent(HostEvent.Players(dto))
     }
 
     private suspend fun broadcast(msg: WsMsg) {
@@ -303,6 +304,7 @@ sealed class HostEvent {
     data class Error(val message: String) : HostEvent()
     data class PlayerJoined(val id: String, val name: String) : HostEvent()
     data class PlayerLeft(val id: String) : HostEvent()
+    data class Players(val players: List<PlayerDto>) : HostEvent()
     data class GameStarted(val count: Int) : HostEvent()
     data class GameCancelled(val reason: String) : HostEvent()
     data class QuestionStarted(val index: Int, val total: Int, val q: QuizQuestion) : HostEvent()

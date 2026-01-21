@@ -140,7 +140,7 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
         pushUndo(UndoEffect.StopHosting)
         stopAllInternal(clearUndo = false)
 
-        _ui.value = state.copy(role = AppRole.HOST, stage = AppStage.LOBBY, error = null)
+        _ui.value = state.copy(role = AppRole.HOST, stage = AppStage.LOBBY, players = emptyList(), error = null)
 
         server = QuizServer(nsd) { evt ->
             when (evt) {
@@ -148,6 +148,8 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
                     _ui.value = _ui.value.copy(hostServiceName = evt.serviceName, hostPort = evt.port)
                 is HostEvent.Error ->
                     _ui.value = _ui.value.copy(error = evt.message)
+                is HostEvent.Players ->
+                    _ui.value = _ui.value.copy(players = evt.players)
 
                 is HostEvent.GameStarted -> {
                     _ui.value = _ui.value.copy(
