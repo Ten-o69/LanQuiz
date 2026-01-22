@@ -19,20 +19,28 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
 import io.github.ten_o69.lanquiz.ui.AppNav
 import io.github.ten_o69.lanquiz.ui.theme.LanQuizTheme
 import io.github.ten_o69.lanquiz.vm.QuizViewModel
+import io.github.ten_o69.lanquiz.vm.ThemeMode
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            LanQuizTheme {
-                val vm: QuizViewModel = viewModel()
+            val vm: QuizViewModel = viewModel()
+            val ui by vm.ui.collectAsState()
+            val darkTheme = when (ui.themeMode) {
+                ThemeMode.SYSTEM -> isSystemInDarkTheme()
+                ThemeMode.DARK -> true
+                ThemeMode.LIGHT -> false
+            }
 
+            LanQuizTheme(darkTheme = darkTheme) {
                 // ✅ один раз при входе: проверка Wi-Fi + (опционально) запрос NEARBY_WIFI_DEVICES
                 StartupChecks(
                     requireWifi = true,

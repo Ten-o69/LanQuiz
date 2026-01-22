@@ -8,6 +8,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
+import io.github.ten_o69.lanquiz.ui.NeonBackground
+import io.github.ten_o69.lanquiz.ui.NeonCard
 import io.github.ten_o69.lanquiz.ui.Routes
 import io.github.ten_o69.lanquiz.vm.AppRole
 import io.github.ten_o69.lanquiz.vm.QuizViewModel
@@ -23,6 +25,7 @@ fun LobbyScreen(vm: QuizViewModel, nav: NavController) {
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = { TopAppBar(title = { Text("Лобби") }) },
         bottomBar = {
             if (ui.role == AppRole.HOST) {
@@ -35,22 +38,31 @@ fun LobbyScreen(vm: QuizViewModel, nav: NavController) {
             }
         }
     ) { pad ->
-        Column(Modifier.padding(pad).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (ui.role == AppRole.HOST) {
-                Text("Комната: QUIZ-${ui.roomCode}")
-                Text("Порт: ${ui.hostPort ?: "-"}")
-            }
-
-            Text("Игроки: ${ui.players.size}")
-
-            LazyColumn(Modifier.fillMaxWidth()) {
-                items(ui.players) {
-                    ListItem(headlineContent = { Text(it.name) }, supportingContent = { Text(it.id.take(8)) })
-                    HorizontalDivider()
+        NeonBackground(contentPadding = pad) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                NeonCard(Modifier.fillMaxWidth()) {
+                    Text("Комната", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(6.dp))
+                    Text("Код: QUIZ-${ui.roomCode}")
+                    Text("Порт: ${ui.hostPort ?: "-"}")
                 }
-            }
 
-            if (ui.error != null) Text(ui.error!!, color = MaterialTheme.colorScheme.error)
+                NeonCard(Modifier.fillMaxWidth()) {
+                    Text("Игроки: ${ui.players.size}", style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(6.dp))
+                    LazyColumn(Modifier.fillMaxWidth()) {
+                        items(ui.players) {
+                            ListItem(
+                                headlineContent = { Text(it.name) },
+                                supportingContent = { Text(it.id.take(8)) }
+                            )
+                            HorizontalDivider()
+                        }
+                    }
+                }
+
+                if (ui.error != null) Text(ui.error!!, color = MaterialTheme.colorScheme.error)
+            }
         }
     }
 }

@@ -38,6 +38,13 @@ class QuizServer(
     private val answers = LinkedHashMap<String, WsMsg.AnswerPayload>() // playerId -> answer for current question
     private var questionStartedAtMs: Long = 0L
     private var questionDurationMs: Long = 0L
+    private var questionDurationConfigMs: Long = 15_000L
+    private var timerEnabled: Boolean = true
+    private var manualAdvance: Boolean = false
+    private var questionRevealed: Boolean = false
+    private var currentIndex: Int = -1
+    private var lastReveal: WsMsg.Reveal? = null
+    private var questionTimerJob: Job? = null
     private var gameInProgress: Boolean = false
     private var gameFinished: Boolean = false
     private var lastScoreboard: List<ScoreDto> = emptyList()
@@ -76,12 +83,21 @@ class QuizServer(
         engine = null
     }
 
-    fun startGame(durationMs: Long = 15_000) {
+    fun startGame(
+        durationMs: Long = 15_000,
+        timerEnabled: Boolean = true,
+        manualAdvance: Boolean = false
+    ) {
         if (questions.isEmpty()) {
             onHostEvent(HostEvent.Error("Нет вопросов"))
             return
         }
         if (gameJob?.isActive == true) return
+
+        val effectiveManual = manualAdvance || !timerEnabled
+        this.timerEnabled = timerEnabled
+        this.manualAdvance = effectiveManual
+        this.questionDurationConfigMs = durationMs
 
         gameJob = scope.launch {
             try {
@@ -94,28 +110,30 @@ class QuizServer(
                 broadcast(WsMsg.StartGame(questions.size))
                 onHostEvent(HostEvent.GameStarted(questions.size))
 
-                for (i in questions.indices) {
-                    ensureActive()
-                    askQuestion(i, durationMs)
+                if (effectiveManual) {
+                    startQuestion(0, durationMs, timerEnabled)
+                    questionTimerJob = maybeStartQuestionTimer(durationMs)
+                    awaitCancellation()
+                } else {
+                    for (i in questions.indices) {
+                        ensureActive()
+                        askQuestionAuto(i, durationMs)
+                    }
                 }
 
-                val final = mutex.withLock { buildScoreboard() }
-                broadcast(WsMsg.GameOver(final))
-                onHostEvent(HostEvent.GameOver(final))
-                mutex.withLock {
-                    lastScoreboard = final
-                    gameInProgress = false
-                    gameFinished = true
-                }
-                dropDisconnectedPlayers()
             } catch (_: CancellationException) {
                 // отменено через cancelGame()
             } finally {
+                questionTimerJob?.cancel()
+                questionTimerJob = null
                 mutex.withLock {
                     acceptingAnswersFor = -1
                     answers.clear()
                     questionStartedAtMs = 0L
                     questionDurationMs = 0L
+                    questionRevealed = false
+                    currentIndex = -1
+                    lastReveal = null
                 }
             }
         }
@@ -124,6 +142,8 @@ class QuizServer(
     fun cancelGame(reason: String = "Отменено ведущим") {
         gameJob?.cancel()
         gameJob = null
+        questionTimerJob?.cancel()
+        questionTimerJob = null
 
         scope.launch {
             mutex.withLock {
@@ -131,6 +151,9 @@ class QuizServer(
                 answers.clear()
                 questionStartedAtMs = 0L
                 questionDurationMs = 0L
+                questionRevealed = false
+                currentIndex = -1
+                lastReveal = null
                 gameInProgress = false
                 gameFinished = false
                 lastScoreboard = emptyList()
@@ -143,14 +166,40 @@ class QuizServer(
         }
     }
 
-    private suspend fun askQuestion(index: Int, durationMs: Long) {
-        val q = questions[index]
+    fun hostNext() {
+        if (!manualAdvance) return
+        scope.launch {
+            val shouldReveal = mutex.withLock { currentIndex >= 0 && !questionRevealed }
+            if (shouldReveal) {
+                revealCurrentQuestion()
+            } else {
+                advanceToNextQuestion()
+            }
+        }
+    }
 
+    private suspend fun askQuestionAuto(index: Int, durationMs: Long) {
+        startQuestion(index, durationMs, timerEnabled = true)
+        delay(durationMs)
+        revealCurrentQuestion()
+        delay(1500)
+        if (index == questions.lastIndex) {
+            finishGame()
+        }
+    }
+
+    private suspend fun startQuestion(index: Int, durationMs: Long, timerEnabled: Boolean) {
+        val q = questions[index]
+        questionTimerJob?.cancel()
+        questionTimerJob = null
         mutex.withLock {
+            currentIndex = index
             acceptingAnswersFor = index
             answers.clear()
+            questionRevealed = false
+            lastReveal = null
             questionStartedAtMs = System.currentTimeMillis()
-            questionDurationMs = durationMs
+            questionDurationMs = if (timerEnabled) durationMs else 0L
         }
 
         broadcast(
@@ -160,18 +209,72 @@ class QuizServer(
                 text = q.text,
                 kind = q.kind,
                 options = q.options,
-                durationMs = durationMs
+                durationMs = if (timerEnabled) durationMs else 0L
             )
         )
         onHostEvent(HostEvent.QuestionStarted(index, questions.size, q))
+    }
 
-        delay(durationMs)
+    private fun maybeStartQuestionTimer(durationMs: Long): Job? {
+        if (!timerEnabled || durationMs <= 0L) return null
+        return scope.launch {
+            delay(durationMs)
+            revealCurrentQuestion()
+        }
+    }
 
-        val reveal = mutex.withLock { applyScoringAndBuildReveal(index, q) }
+    private suspend fun revealCurrentQuestion() {
+        val reveal = mutex.withLock {
+            val index = currentIndex
+            if (index < 0 || questionRevealed) {
+                return@withLock null
+            }
+            val q = questions[index]
+            questionRevealed = true
+            val r = applyScoringAndBuildReveal(index, q)
+            lastReveal = r
+            r
+        } ?: return
+
+        questionTimerJob?.cancel()
+        questionTimerJob = null
         broadcast(reveal)
         onHostEvent(HostEvent.Reveal(reveal))
+    }
 
-        delay(1500)
+    private suspend fun advanceToNextQuestion() {
+        val nextIndex = mutex.withLock {
+            if (currentIndex < 0 || !questionRevealed) {
+                return@withLock null
+            }
+            currentIndex + 1
+        } ?: return
+
+        if (nextIndex > questions.lastIndex) {
+            finishGame()
+            return
+        }
+
+        startQuestion(nextIndex, questionDurationConfigMs, timerEnabled)
+        questionTimerJob = maybeStartQuestionTimer(questionDurationConfigMs)
+    }
+
+    private suspend fun finishGame() {
+        val final = mutex.withLock { buildScoreboard() }
+        broadcast(WsMsg.GameOver(final))
+        onHostEvent(HostEvent.GameOver(final))
+        mutex.withLock {
+            lastScoreboard = final
+            gameInProgress = false
+            gameFinished = true
+        }
+        questionTimerJob?.cancel()
+        questionTimerJob = null
+        dropDisconnectedPlayers()
+        if (manualAdvance) {
+            gameJob?.cancel()
+            gameJob = null
+        }
     }
 
     private fun applyScoringAndBuildReveal(index: Int, q: QuizQuestion): WsMsg.Reveal {
@@ -296,6 +399,9 @@ class QuizServer(
                             if (current != null) {
                                 ws.send(Frame.Text(WireCodec.encode(current)))
                             }
+                            if (snapshot.questionRevealed && snapshot.lastReveal != null) {
+                                ws.send(Frame.Text(WireCodec.encode(snapshot.lastReveal)))
+                            }
                         }
                     }
 
@@ -303,7 +409,7 @@ class QuizServer(
                         val pid = playerId ?: continue
                         mutex.withLock {
                             // теперь можно менять ответ сколько угодно, пока вопрос активен
-                            if (msg.questionIndex == acceptingAnswersFor) {
+                            if (msg.questionIndex == acceptingAnswersFor && !questionRevealed) {
                                 answers[pid] = msg.answer
                             }
                         }
@@ -312,7 +418,7 @@ class QuizServer(
                     is WsMsg.ClearAnswer -> {
                         val pid = playerId ?: continue
                         mutex.withLock {
-                            if (msg.questionIndex == acceptingAnswersFor) {
+                            if (msg.questionIndex == acceptingAnswersFor && !questionRevealed) {
                                 answers.remove(pid)
                             }
                         }
@@ -389,6 +495,9 @@ class QuizServer(
                 acceptingIndex = acceptingAnswersFor,
                 questionStartedAtMs = questionStartedAtMs,
                 questionDurationMs = questionDurationMs,
+                timerEnabled = timerEnabled,
+                questionRevealed = questionRevealed,
+                lastReveal = lastReveal,
                 scoreboard = finalBoard
             )
         }
@@ -397,10 +506,13 @@ class QuizServer(
     private fun buildCurrentQuestion(snapshot: GameSnapshot): WsMsg.Question? {
         if (snapshot.acceptingIndex < 0) return null
         val q = questions.getOrNull(snapshot.acceptingIndex) ?: return null
-        val now = System.currentTimeMillis()
-        val elapsed = now - snapshot.questionStartedAtMs
-        val remaining = (snapshot.questionDurationMs - elapsed).coerceAtLeast(0L)
-        if (remaining <= 0L) return null
+        val remaining = if (snapshot.timerEnabled && snapshot.questionDurationMs > 0L) {
+            val now = System.currentTimeMillis()
+            val elapsed = now - snapshot.questionStartedAtMs
+            (snapshot.questionDurationMs - elapsed).coerceAtLeast(0L)
+        } else {
+            0L
+        }
         return WsMsg.Question(
             index = snapshot.acceptingIndex,
             total = questions.size,
@@ -420,6 +532,9 @@ private data class GameSnapshot(
     val acceptingIndex: Int,
     val questionStartedAtMs: Long,
     val questionDurationMs: Long,
+    val timerEnabled: Boolean,
+    val questionRevealed: Boolean,
+    val lastReveal: WsMsg.Reveal?,
     val scoreboard: List<ScoreDto>
 )
 

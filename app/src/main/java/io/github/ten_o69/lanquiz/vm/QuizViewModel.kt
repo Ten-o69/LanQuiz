@@ -1,6 +1,7 @@
 package io.github.ten_o69.lanquiz.vm
 
 import android.app.Application
+import android.content.Context
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -14,14 +15,17 @@ import kotlinx.coroutines.cancel
 
 enum class AppRole { NONE, HOST, CLIENT }
 enum class AppStage { HOME, HOST_SETUP, JOIN, LOBBY, GAME, RESULTS }
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 data class UiState(
     val role: AppRole = AppRole.NONE,
     val stage: AppStage = AppStage.HOME,
+    val selectedRole: AppRole = AppRole.HOST,
 
     val nickname: String = "Player-${(1000..9999).random()}",
     val roomCode: String = randomCode(),
     val password: String = "",
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
 
     val questions: List<QuizQuestion> = emptyList(),
     val players: List<PlayerDto> = emptyList(),
@@ -33,6 +37,10 @@ data class UiState(
     // чтобы Undo работал на ответы
     val answeredForIndex: Int? = null,
     val answeredPayload: WsMsg.AnswerPayload? = null,
+
+    val timerEnabled: Boolean = true,
+    val timerSeconds: Int = 15,
+    val manualAdvance: Boolean = false,
 
     val hostServiceName: String? = null,
     val hostPort: Int? = null,
@@ -59,6 +67,7 @@ private data class UndoEntry(
 class QuizViewModel(app: Application) : AndroidViewModel(app) {
 
     private val nsd = NsdHelper(app.applicationContext)
+    private val prefs = app.getSharedPreferences("settings", Context.MODE_PRIVATE)
 
     private var server: QuizServer? = null
     private var client: QuizClient? = null
@@ -70,13 +79,38 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
     private val _ui = MutableStateFlow(UiState())
     val ui: StateFlow<UiState> = _ui
 
+    init {
+        val saved = prefs.getString("theme_mode", ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name
+        val mode = runCatching { ThemeMode.valueOf(saved) }.getOrDefault(ThemeMode.SYSTEM)
+        _ui.value = _ui.value.copy(themeMode = mode)
+    }
+
     fun go(stage: AppStage) = pushUndoAndUpdate(UndoEffect.None) {
         it.copy(stage = stage, error = null)
     }
 
+    fun setSelectedRole(v: AppRole) = pushUndoAndUpdate(UndoEffect.None) { it.copy(selectedRole = v) }
     fun setNickname(v: String) = pushUndoAndUpdate(UndoEffect.None) { it.copy(nickname = v) }
     fun setRoomCode(v: String) = pushUndoAndUpdate(UndoEffect.None) { it.copy(roomCode = v.uppercase()) }
     fun setPassword(v: String) = pushUndoAndUpdate(UndoEffect.None) { it.copy(password = v) }
+    fun setThemeMode(v: ThemeMode) {
+        pushUndoAndUpdate(UndoEffect.None) { it.copy(themeMode = v) }
+        prefs.edit().putString("theme_mode", v.name).apply()
+    }
+
+    fun setTimerEnabled(v: Boolean) = pushUndoAndUpdate(UndoEffect.None) {
+        val manual = if (!v) true else it.manualAdvance
+        it.copy(timerEnabled = v, manualAdvance = manual)
+    }
+
+    fun setTimerSeconds(v: Int) = pushUndoAndUpdate(UndoEffect.None) {
+        it.copy(timerSeconds = v.coerceIn(5, 60))
+    }
+
+    fun setManualAdvance(v: Boolean) = pushUndoAndUpdate(UndoEffect.None) {
+        val timer = if (!v) true else it.timerEnabled
+        it.copy(manualAdvance = v, timerEnabled = timer)
+    }
 
     fun undo() {
         val entry = undoStack.removeLastOrNull() ?: return
@@ -198,13 +232,22 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
     fun hostStartGame() {
         pushUndo(UndoEffect.CancelGame)
         _ui.value.hostPort?.let { connectLocalHostClient(it) }
-        server?.startGame(durationMs = 15_000)
+        val state = _ui.value
+        server?.startGame(
+            durationMs = state.timerSeconds * 1000L,
+            timerEnabled = state.timerEnabled,
+            manualAdvance = state.manualAdvance
+        )
     }
 
     fun hostCancelGame() {
         pushUndo(UndoEffect.None)
         server?.cancelGame("Отменено ведущим")
         _ui.value = _ui.value.copy(stage = AppStage.LOBBY)
+    }
+
+    fun hostNext() {
+        server?.hostNext()
     }
 
     // CLIENT

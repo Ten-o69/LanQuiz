@@ -14,6 +14,7 @@ object Routes {
     const val LOBBY = "lobby"
     const val GAME = "game"
     const val RESULTS = "results"
+    const val SETTINGS = "settings"
 }
 
 @Composable
@@ -27,5 +28,6 @@ fun AppNav(vm: QuizViewModel) {
         composable(Routes.LOBBY) { LobbyScreen(vm, nav) }
         composable(Routes.GAME) { GameScreen(vm, nav) }
         composable(Routes.RESULTS) { ResultsScreen(vm, nav) }
+        composable(Routes.SETTINGS) { SettingsScreen(vm, nav) }
     }
 }
