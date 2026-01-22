@@ -12,48 +12,44 @@ class QuizClient(
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    private data class ConnectParams(
+        val host: String,
+        val port: Int,
+        val code: String,
+        val name: String,
+        val password: String?
+    )
+
     private val client = HttpClient(OkHttp) {
-        install(WebSockets)
+        install(WebSockets) {
+            pingInterval = 15_000L
+        }
     }
 
     private var session: DefaultClientWebSocketSession? = null
+    private var connectJob: Job? = null
+    @Volatile private var closing = false
+    private var params: ConnectParams? = null
+    private var playerId: String? = null
+    @Volatile private var reconnectEnabled = true
+    @Volatile private var reportedDisconnect = false
 
     fun connect(host: String, port: Int, code: String, name: String, password: String?) {
-        scope.launch {
-            try {
-                client.webSocket(host = host, port = port, path = "/ws") {
-                    session = this
-                    send(Frame.Text(WireCodec.encode(WsMsg.JoinReq(code, name, password))))
-
-                    for (frame in incoming) {
-                        val text = (frame as? Frame.Text)?.readText() ?: continue
-                        val msg = WireCodec.decode(text)
-
-                        when (msg) {
-                            is WsMsg.JoinOk -> onEvent(ClientEvent.Joined(msg.playerId, msg.players))
-                            is WsMsg.JoinDenied -> onEvent(ClientEvent.Error(msg.reason))
-                            is WsMsg.Players -> onEvent(ClientEvent.Players(msg.players))
-                            is WsMsg.StartGame -> onEvent(ClientEvent.GameStarted(msg.questionCount))
-                            is WsMsg.GameCancelled -> onEvent(ClientEvent.GameCancelled(msg.reason))
-                            is WsMsg.Question -> onEvent(ClientEvent.Question(msg))
-                            is WsMsg.Reveal -> onEvent(ClientEvent.Reveal(msg))
-                            is WsMsg.GameOver -> onEvent(ClientEvent.GameOver(msg.scoreboard))
-                            is WsMsg.Error -> onEvent(ClientEvent.Error(msg.message))
-                            else -> {}
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                onEvent(ClientEvent.Error("Connect error: ${e.message}"))
-            } finally {
-                session = null
-            }
+        val next = ConnectParams(host, port, code, name, password)
+        if (params == next && session?.isActive == true && connectJob?.isActive == true) {
+            return
         }
+        params = next
+        closing = false
+        reconnectEnabled = true
+        reportedDisconnect = false
+        startConnectLoop()
     }
 
     fun sendAnswer(questionIndex: Int, payload: WsMsg.AnswerPayload) {
         scope.launch {
             val s = session ?: return@launch
+            if (!s.isActive) return@launch
             runCatching {
                 s.send(Frame.Text(WireCodec.encode(WsMsg.Answer(questionIndex, payload))))
             }
@@ -63,6 +59,7 @@ class QuizClient(
     fun clearAnswer(questionIndex: Int) {
         scope.launch {
             val s = session ?: return@launch
+            if (!s.isActive) return@launch
             runCatching {
                 s.send(Frame.Text(WireCodec.encode(WsMsg.ClearAnswer(questionIndex))))
             }
@@ -70,8 +67,74 @@ class QuizClient(
     }
 
     fun close() {
+        closing = true
+        reconnectEnabled = false
+        connectJob?.cancel()
+        connectJob = null
         scope.cancel()
         runCatching { client.close() }
+    }
+
+    private fun startConnectLoop() {
+        connectJob?.cancel()
+        connectJob = scope.launch {
+            var attempt = 0
+            while (isActive && !closing) {
+                val p = params ?: return@launch
+                if (session?.isActive == true) {
+                    delay(500L)
+                    continue
+                }
+                try {
+                    client.webSocket(host = p.host, port = p.port, path = "/ws") {
+                        session = this
+                        send(Frame.Text(WireCodec.encode(WsMsg.JoinReq(p.code, p.name, p.password, playerId))))
+
+                        for (frame in incoming) {
+                            val text = (frame as? Frame.Text)?.readText() ?: continue
+                            val msg = runCatching { WireCodec.decode(text) }.getOrNull() ?: continue
+
+                            when (msg) {
+                                is WsMsg.JoinOk -> {
+                                    playerId = msg.playerId
+                                    reportedDisconnect = false
+                                    attempt = 0
+                                    onEvent(ClientEvent.Joined(msg.playerId, msg.players))
+                                }
+                                is WsMsg.JoinDenied -> {
+                                    reconnectEnabled = false
+                                    onEvent(ClientEvent.Error(msg.reason))
+                                    return@webSocket
+                                }
+                                is WsMsg.Players -> onEvent(ClientEvent.Players(msg.players))
+                                is WsMsg.StartGame -> onEvent(ClientEvent.GameStarted(msg.questionCount))
+                                is WsMsg.GameCancelled -> onEvent(ClientEvent.GameCancelled(msg.reason))
+                                is WsMsg.Question -> onEvent(ClientEvent.Question(msg))
+                                is WsMsg.Reveal -> onEvent(ClientEvent.Reveal(msg))
+                                is WsMsg.GameOver -> onEvent(ClientEvent.GameOver(msg.scoreboard))
+                                is WsMsg.Error -> onEvent(ClientEvent.Error(msg.message))
+                                else -> {}
+                            }
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    return@launch
+                } catch (e: Exception) {
+                    if (closing || !reconnectEnabled) return@launch
+                } finally {
+                    session = null
+                }
+
+                if (closing || !reconnectEnabled) return@launch
+                if (!reportedDisconnect) {
+                    reportedDisconnect = true
+                    onEvent(ClientEvent.Error("Проблемы с подключением. Переподключаемся..."))
+                }
+
+                attempt = (attempt + 1).coerceAtMost(8)
+                delay(400L * attempt)
+            }
+        }
     }
 }
 

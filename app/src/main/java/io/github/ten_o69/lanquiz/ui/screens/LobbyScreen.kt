@@ -46,7 +46,7 @@ fun LobbyScreen(vm: QuizViewModel, nav: NavController) {
             LazyColumn(Modifier.fillMaxWidth()) {
                 items(ui.players) {
                     ListItem(headlineContent = { Text(it.name) }, supportingContent = { Text(it.id.take(8)) })
-                    Divider()
+                    HorizontalDivider()
                 }
             }
 

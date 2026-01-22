@@ -30,13 +30,19 @@ class QuizServer(
     private var questions: List<QuizQuestion> = emptyList()
 
     private val sessions = LinkedHashMap<String, DefaultWebSocketServerSession>()
+    private val sessionByPlayerId = LinkedHashMap<String, String>() // playerId -> sessionId
     private val players = LinkedHashMap<String, Player>() // id -> player
     private val score = LinkedHashMap<String, Pair<Int, Int>>() // id -> (correct, wrong)
 
     private var acceptingAnswersFor: Int = -1
     private val answers = LinkedHashMap<String, WsMsg.AnswerPayload>() // playerId -> answer for current question
+    private var questionStartedAtMs: Long = 0L
+    private var questionDurationMs: Long = 0L
+    private var gameInProgress: Boolean = false
+    private var gameFinished: Boolean = false
+    private var lastScoreboard: List<ScoreDto> = emptyList()
 
-    fun start(code: String, password: String?, questions: List<QuizQuestion>) {
+    fun start(code: String, password: String?, questions: List<QuizQuestion>): Int {
         this.roomCode = code
         this.password = password
         this.questions = questions
@@ -45,8 +51,8 @@ class QuizServer(
 
         engine = embeddedServer(CIO, host = "0.0.0.0", port = port) {
             install(WebSockets) {
-                pingPeriod = 15.seconds.toJavaDuration()
-                timeout = 30.seconds.toJavaDuration()
+                pingPeriod = 30.seconds.toJavaDuration()
+                timeout = 120.seconds.toJavaDuration()
                 maxFrameSize = Long.MAX_VALUE
                 masking = false
             }
@@ -59,6 +65,7 @@ class QuizServer(
             onResult = { realName -> onHostEvent(HostEvent.RoomStarted(realName, port)) },
             onError = { err -> onHostEvent(HostEvent.Error(err)) }
         )
+        return port
     }
 
     fun stop() {
@@ -79,6 +86,11 @@ class QuizServer(
         gameJob = scope.launch {
             try {
                 resetScores()
+                mutex.withLock {
+                    gameInProgress = true
+                    gameFinished = false
+                    lastScoreboard = emptyList()
+                }
                 broadcast(WsMsg.StartGame(questions.size))
                 onHostEvent(HostEvent.GameStarted(questions.size))
 
@@ -87,15 +99,23 @@ class QuizServer(
                     askQuestion(i, durationMs)
                 }
 
-                val final = buildScoreboard()
+                val final = mutex.withLock { buildScoreboard() }
                 broadcast(WsMsg.GameOver(final))
                 onHostEvent(HostEvent.GameOver(final))
+                mutex.withLock {
+                    lastScoreboard = final
+                    gameInProgress = false
+                    gameFinished = true
+                }
+                dropDisconnectedPlayers()
             } catch (_: CancellationException) {
                 // отменено через cancelGame()
             } finally {
                 mutex.withLock {
                     acceptingAnswersFor = -1
                     answers.clear()
+                    questionStartedAtMs = 0L
+                    questionDurationMs = 0L
                 }
             }
         }
@@ -109,10 +129,17 @@ class QuizServer(
             mutex.withLock {
                 acceptingAnswersFor = -1
                 answers.clear()
+                questionStartedAtMs = 0L
+                questionDurationMs = 0L
+                gameInProgress = false
+                gameFinished = false
+                lastScoreboard = emptyList()
             }
             resetScores()
             broadcast(WsMsg.GameCancelled(reason))
             onHostEvent(HostEvent.GameCancelled(reason))
+            dropDisconnectedPlayers()
+            broadcastPlayers()
         }
     }
 
@@ -122,6 +149,8 @@ class QuizServer(
         mutex.withLock {
             acceptingAnswersFor = index
             answers.clear()
+            questionStartedAtMs = System.currentTimeMillis()
+            questionDurationMs = durationMs
         }
 
         broadcast(
@@ -199,6 +228,7 @@ class QuizServer(
     private suspend fun handleSession(ws: DefaultWebSocketServerSession) {
         val sessionId = UUID.randomUUID().toString()
         var playerId: String? = null
+        var kickedSession: DefaultWebSocketServerSession? = null
 
         try {
             for (frame in ws.incoming) {
@@ -211,6 +241,7 @@ class QuizServer(
 
                 when (msg) {
                     is WsMsg.JoinReq -> {
+                        kickedSession = null
                         if (!msg.roomCode.equals(roomCode, ignoreCase = true)) {
                             ws.send(Frame.Text(WireCodec.encode(WsMsg.JoinDenied("Неверный код"))))
                             ws.close(CloseReason(CloseReason.Codes.CANNOT_ACCEPT, "Bad code"))
@@ -224,21 +255,48 @@ class QuizServer(
                             }
                         }
 
-                        val id = UUID.randomUUID().toString()
+                        val requestedId = msg.playerId?.takeIf { it.isNotBlank() }
+                        val id = mutex.withLock {
+                            val existing = requestedId?.takeIf { players.containsKey(it) }
+                            val finalId = existing ?: UUID.randomUUID().toString()
+                            sessions[sessionId] = ws
+                            players[finalId] = Player(finalId, msg.name.take(24))
+                            score.putIfAbsent(finalId, 0 to 0)
+                            val oldSid = sessionByPlayerId.put(finalId, sessionId)
+                            if (oldSid != null && oldSid != sessionId) {
+                                kickedSession = sessions.remove(oldSid)
+                            }
+                            finalId
+                        }
                         playerId = id
 
-                        mutex.withLock {
-                            sessions[sessionId] = ws
-                            val player = Player(id, msg.name.take(24))
-                            players[id] = player
-                            score.putIfAbsent(id, 0 to 0)
+                        kickedSession?.let {
+                            runCatching {
+                                it.close(CloseReason(CloseReason.Codes.NORMAL, "Reconnected"))
+                            }
                         }
+                        kickedSession = null
 
                         val dto = mutex.withLock { players.values.map { PlayerDto(it.id, it.name) } }
                         ws.send(Frame.Text(WireCodec.encode(WsMsg.JoinOk(id, dto))))
 
                         broadcastPlayers()
                         onHostEvent(HostEvent.PlayerJoined(id, msg.name))
+
+                        val snapshot = snapshotGameState()
+                        if (snapshot.gameFinished) {
+                            if (snapshot.scoreboard.isNotEmpty()) {
+                                ws.send(Frame.Text(WireCodec.encode(WsMsg.GameOver(snapshot.scoreboard))))
+                            }
+                            continue
+                        }
+                        if (snapshot.gameInProgress) {
+                            ws.send(Frame.Text(WireCodec.encode(WsMsg.StartGame(questions.size))))
+                            val current = buildCurrentQuestion(snapshot)
+                            if (current != null) {
+                                ws.send(Frame.Text(WireCodec.encode(current)))
+                            }
+                        }
                     }
 
                     is WsMsg.Answer -> {
@@ -267,9 +325,13 @@ class QuizServer(
             val pid = playerId
             mutex.withLock {
                 sessions.remove(sessionId)
-                if (pid != null) {
+                if (pid != null && sessionByPlayerId[pid] == sessionId) {
+                    sessionByPlayerId.remove(pid)
+                }
+                if (pid != null && !gameInProgress && sessionByPlayerId[pid] == null) {
                     players.remove(pid)
                     score.remove(pid)
+                    answers.remove(pid)
                 }
             }
             if (pid != null) {
@@ -286,18 +348,80 @@ class QuizServer(
     }
 
     private suspend fun broadcast(msg: WsMsg) {
-        val payload = Frame.Text(WireCodec.encode(msg))
+        val payload = WireCodec.encode(msg)
+        val snapshot = mutex.withLock { sessions.toList() }
         val dead = mutableListOf<String>()
-        mutex.withLock {
-            sessions.forEach { (sid, s) ->
-                runCatching { s.send(payload) }.onFailure { dead += sid }
-            }
-            dead.forEach { sessions.remove(it) }
+        for ((sid, s) in snapshot) {
+            runCatching { s.send(Frame.Text(payload)) }.onFailure { dead += sid }
         }
+        if (dead.isNotEmpty()) {
+            mutex.withLock { dead.forEach { sessions.remove(it) } }
+        }
+    }
+
+    private suspend fun dropDisconnectedPlayers() {
+        mutex.withLock {
+            val online = sessionByPlayerId.filterValues { sessions.containsKey(it) }.keys.toSet()
+            val stale = sessionByPlayerId.keys.filter { it !in online }
+            for (id in stale) {
+                sessionByPlayerId.remove(id)
+            }
+            val toRemove = players.keys.filter { it !in online }
+            for (id in toRemove) {
+                players.remove(id)
+                score.remove(id)
+                answers.remove(id)
+            }
+        }
+    }
+
+    private suspend fun snapshotGameState(): GameSnapshot {
+        return mutex.withLock {
+            val finalBoard =
+                if (gameFinished) {
+                    if (lastScoreboard.isNotEmpty()) lastScoreboard else buildScoreboard()
+                } else {
+                    emptyList()
+                }
+            GameSnapshot(
+                gameInProgress = gameInProgress,
+                gameFinished = gameFinished,
+                acceptingIndex = acceptingAnswersFor,
+                questionStartedAtMs = questionStartedAtMs,
+                questionDurationMs = questionDurationMs,
+                scoreboard = finalBoard
+            )
+        }
+    }
+
+    private fun buildCurrentQuestion(snapshot: GameSnapshot): WsMsg.Question? {
+        if (snapshot.acceptingIndex < 0) return null
+        val q = questions.getOrNull(snapshot.acceptingIndex) ?: return null
+        val now = System.currentTimeMillis()
+        val elapsed = now - snapshot.questionStartedAtMs
+        val remaining = (snapshot.questionDurationMs - elapsed).coerceAtLeast(0L)
+        if (remaining <= 0L) return null
+        return WsMsg.Question(
+            index = snapshot.acceptingIndex,
+            total = questions.size,
+            text = q.text,
+            kind = q.kind,
+            options = q.options,
+            durationMs = remaining
+        )
     }
 
     private fun pickFreePort(): Int = ServerSocket(0).use { it.localPort }
 }
+
+private data class GameSnapshot(
+    val gameInProgress: Boolean,
+    val gameFinished: Boolean,
+    val acceptingIndex: Int,
+    val questionStartedAtMs: Long,
+    val questionDurationMs: Long,
+    val scoreboard: List<ScoreDto>
+)
 
 sealed class HostEvent {
     data class RoomStarted(val serviceName: String, val port: Int) : HostEvent()

@@ -11,7 +11,8 @@ sealed class WsMsg {
     data class JoinReq(
         val roomCode: String,
         val name: String,
-        val password: String? = null
+        val password: String? = null,
+        val playerId: String? = null
     ) : WsMsg()
 
     @Serializable @SerialName("join_ok")

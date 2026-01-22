@@ -50,7 +50,7 @@ fun ResultsScreen(vm: QuizViewModel, nav: NavController) {
                             headlineContent = { Text("#${idx + 4}  ${s.name}") },
                             supportingContent = { Text("✅ ${s.correct}   ❌ ${s.wrong}") }
                         )
-                        Divider()
+                        HorizontalDivider()
                     }
                 }
             }

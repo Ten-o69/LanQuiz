@@ -189,12 +189,15 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
                 else -> {}
             }
         }.also {
-            it.start(state.roomCode, state.password.takeIf { p -> p.isNotBlank() }, state.questions)
+            val port = it.start(state.roomCode, state.password.takeIf { p -> p.isNotBlank() }, state.questions)
+            _ui.value = _ui.value.copy(hostPort = port)
+            connectLocalHostClient(port)
         }
     }
 
     fun hostStartGame() {
         pushUndo(UndoEffect.CancelGame)
+        _ui.value.hostPort?.let { connectLocalHostClient(it) }
         server?.startGame(durationMs = 15_000)
     }
 
@@ -233,7 +236,13 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
         client = QuizClient { evt ->
             when (evt) {
                 is ClientEvent.Joined -> {
-                    _ui.value = _ui.value.copy(stage = AppStage.LOBBY, players = evt.players, error = null)
+                    val currentStage = _ui.value.stage
+                    val nextStage = if (currentStage == AppStage.GAME || currentStage == AppStage.RESULTS) {
+                        currentStage
+                    } else {
+                        AppStage.LOBBY
+                    }
+                    _ui.value = _ui.value.copy(stage = nextStage, players = evt.players, error = null)
                 }
                 is ClientEvent.Players -> _ui.value = _ui.value.copy(players = evt.players)
                 is ClientEvent.GameStarted -> _ui.value = _ui.value.copy(stage = AppStage.GAME, error = null)
@@ -263,6 +272,16 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
             }
         }.also {
             it.connect(host, port, state.roomCode, state.nickname, state.password.takeIf { p -> p.isNotBlank() })
+        }
+    }
+
+    private fun connectLocalHostClient(port: Int) {
+        val state = _ui.value
+        val host = "127.0.0.1"
+        if (client == null) {
+            connectClient(host, port)
+        } else {
+            client?.connect(host, port, state.roomCode, state.nickname, state.password.takeIf { p -> p.isNotBlank() })
         }
     }
 
