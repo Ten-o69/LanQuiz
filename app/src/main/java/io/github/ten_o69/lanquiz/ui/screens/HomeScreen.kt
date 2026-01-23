@@ -1,17 +1,39 @@
 package io.github.ten_o69.lanquiz.ui.screens
 
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import io.github.ten_o69.lanquiz.ui.NeonBackground
 import io.github.ten_o69.lanquiz.ui.NeonCard
 import io.github.ten_o69.lanquiz.ui.Routes
+import io.github.ten_o69.lanquiz.ui.components.HeroHeader
+import io.github.ten_o69.lanquiz.ui.components.SectionHeader
+import io.github.ten_o69.lanquiz.ui.components.SegmentedControl
+import io.github.ten_o69.lanquiz.ui.components.StatusBanner
+import io.github.ten_o69.lanquiz.ui.components.BannerTone
 import io.github.ten_o69.lanquiz.vm.AppRole
 import io.github.ten_o69.lanquiz.vm.QuizViewModel
 
@@ -20,6 +42,7 @@ import io.github.ten_o69.lanquiz.vm.QuizViewModel
 fun HomeScreen(vm: QuizViewModel, nav: NavController) {
     val ui by vm.ui.collectAsState()
     val canUndo by vm.canUndo.collectAsState() // <-- нужно, чтобы кнопка Undo включалась/выключалась
+    val isHost = ui.selectedRole == AppRole.HOST
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -42,12 +65,30 @@ fun HomeScreen(vm: QuizViewModel, nav: NavController) {
     ) { pad ->
         NeonBackground(contentPadding = pad) {
             Column(
-                Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp)
+                Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                HeroHeader(
+                    title = "LAN Quiz",
+                    subtitle = "Аркадная викторина по локальной сети"
+                )
+
+                SegmentedControl(
+                    options = listOf("Хост", "Игрок"),
+                    selectedIndex = if (isHost) 0 else 1,
+                    onSelect = { idx ->
+                        vm.setSelectedRole(if (idx == 0) AppRole.HOST else AppRole.CLIENT)
+                    }
+                )
+
                 NeonCard(Modifier.fillMaxWidth()) {
-                    Text("Профиль", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
+                    SectionHeader(
+                        title = "Профиль",
+                        subtitle = "Имя будет видно другим участникам"
+                    )
+                    Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = ui.nickname,
                         onValueChange = vm::setNickname,
@@ -55,7 +96,18 @@ fun HomeScreen(vm: QuizViewModel, nav: NavController) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(Modifier.height(8.dp))
+                }
+
+                NeonCard(Modifier.fillMaxWidth()) {
+                    SectionHeader(
+                        title = "Комната",
+                        subtitle = if (isHost) {
+                            "Код понадобится игрокам для подключения"
+                        } else {
+                            "Введи код, который дал ведущий"
+                        }
+                    )
+                    Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = ui.roomCode,
                         onValueChange = vm::setRoomCode,
@@ -63,7 +115,7 @@ fun HomeScreen(vm: QuizViewModel, nav: NavController) {
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(10.dp))
                     OutlinedTextField(
                         value = ui.password,
                         onValueChange = vm::setPassword,
@@ -73,73 +125,29 @@ fun HomeScreen(vm: QuizViewModel, nav: NavController) {
                     )
                 }
 
-                NeonCard(Modifier.fillMaxWidth()) {
-                    Text("Роль", style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        RoleToggleButton(
-                            text = "Хост",
-                            selected = ui.selectedRole == AppRole.HOST,
-                            onClick = { vm.setSelectedRole(AppRole.HOST) },
-                            modifier = Modifier.weight(1f)
-                        )
-                        RoleToggleButton(
-                            text = "Игрок",
-                            selected = ui.selectedRole == AppRole.CLIENT,
-                            onClick = { vm.setSelectedRole(AppRole.CLIENT) },
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
                 if (ui.error != null) {
-                    Text(ui.error!!, color = MaterialTheme.colorScheme.error)
+                    StatusBanner(
+                        text = ui.error!!,
+                        tone = BannerTone.Error
+                    )
                 }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            if (ui.selectedRole == AppRole.HOST) {
-                                nav.navigate(Routes.HOST)
-                            } else {
-                                vm.startJoinDiscovery()
-                                nav.navigate(Routes.JOIN)
-                            }
+                Button(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 54.dp),
+                    onClick = {
+                        if (isHost) {
+                            nav.navigate(Routes.HOST)
+                        } else {
+                            vm.startJoinDiscovery()
+                            nav.navigate(Routes.JOIN)
                         }
-                    ) {
-                        Text(if (ui.selectedRole == AppRole.HOST) "Создать" else "Подключиться")
                     }
-
-                    OutlinedButton(
-                        modifier = Modifier.weight(1f),
-                        onClick = {
-                            if (ui.selectedRole == AppRole.HOST) {
-                                vm.startJoinDiscovery()
-                                nav.navigate(Routes.JOIN)
-                            } else {
-                                nav.navigate(Routes.HOST)
-                            }
-                        }
-                    ) {
-                        Text(if (ui.selectedRole == AppRole.HOST) "Я игрок" else "Я хост")
-                    }
+                ) {
+                    Text(if (isHost) "Создать комнату" else "Подключиться")
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun RoleToggleButton(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    if (selected) {
-        Button(onClick = onClick, modifier = modifier) { Text(text) }
-    } else {
-        OutlinedButton(onClick = onClick, modifier = modifier) { Text(text) }
     }
 }

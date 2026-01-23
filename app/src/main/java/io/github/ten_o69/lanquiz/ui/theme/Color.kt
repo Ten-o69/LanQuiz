@@ -2,19 +2,22 @@ package io.github.ten_o69.lanquiz.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-val NeonBlue = Color(0xFF5CE1E6)
-val NeonAmber = Color(0xFFFFA347)
-val NeonGreen = Color(0xFF7CFF6B)
-val NeonPink = Color(0xFFFF6FB1)
+val ArcadeBlue = Color(0xFF2D66F4)
+val ArcadeBlueBright = Color(0xFF5EA2FF)
+val ArcadeOrange = Color(0xFFFF8A1F)
+val ArcadeOrangeSoft = Color(0xFFFFC06A)
 
-val DarkBackground = Color(0xFF0B1020)
-val DarkSurface = Color(0xFF131B33)
-val DarkSurfaceAlt = Color(0xFF1A2746)
-val DarkOn = Color(0xFFEAF2FF)
-val DarkMuted = Color(0xFF9AA8C7)
+val DarkBackground = Color(0xFF0B1120)
+val DarkSurface = Color(0xFF141C2F)
+val DarkSurfaceAlt = Color(0xFF1D2840)
+val DarkOn = Color(0xFFF0F4FF)
+val DarkMuted = Color(0xFFB8C6E3)
 
-val LightBackground = Color(0xFFF2F6FF)
+val LightBackground = Color(0xFFF4F7FF)
 val LightSurface = Color(0xFFFFFFFF)
-val LightSurfaceAlt = Color(0xFFE6EDF9)
-val LightOn = Color(0xFF101828)
-val LightMuted = Color(0xFF667085)
+val LightSurfaceAlt = Color(0xFFEDF2FF)
+val LightOn = Color(0xFF111827)
+val LightMuted = Color(0xFF3E4C65)
+
+val SuccessGreen = Color(0xFF23C98E)
+val WarningAmber = Color(0xFFFFB24D)

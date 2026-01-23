@@ -1,8 +1,32 @@
 package io.github.ten_o69.lanquiz.ui.screens
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.BottomAppBar
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
@@ -10,7 +34,12 @@ import io.github.ten_o69.lanquiz.data.QuestionKind
 import io.github.ten_o69.lanquiz.data.WsMsg
 import io.github.ten_o69.lanquiz.ui.NeonBackground
 import io.github.ten_o69.lanquiz.ui.NeonCard
+import io.github.ten_o69.lanquiz.ui.components.BannerTone
+import io.github.ten_o69.lanquiz.ui.components.HeroHeader
+import io.github.ten_o69.lanquiz.ui.components.StatPill
+import io.github.ten_o69.lanquiz.ui.components.StatusBanner
 import io.github.ten_o69.lanquiz.vm.AppRole
+import io.github.ten_o69.lanquiz.vm.AppStage
 import io.github.ten_o69.lanquiz.vm.QuizViewModel
 import kotlinx.coroutines.delay
 
@@ -39,17 +68,23 @@ fun GameScreen(vm: QuizViewModel, nav: NavController) {
 
     LaunchedEffect(ui.stage) {
         if (ui.stage.name == "RESULTS") nav.navigate("results")
+        if (ui.stage == AppStage.HOME) {
+            nav.navigate("home") { popUpTo("home") { inclusive = true } }
+        }
     }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
-        topBar = { TopAppBar(title = { Text("Вопрос") }) },
+        topBar = { TopAppBar(title = { Text("Игра") }) },
         bottomBar = {
             if (ui.role == AppRole.HOST && ui.manualAdvance) {
                 BottomAppBar {
                     Button(
                         onClick = { vm.hostNext() },
-                        modifier = Modifier.fillMaxWidth().padding(12.dp)
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp)
+                            .heightIn(min = 50.dp)
                     ) {
                         Text(if (reveal != null) "Далее" else "Открыть ответ")
                     }
@@ -60,8 +95,13 @@ fun GameScreen(vm: QuizViewModel, nav: NavController) {
         NeonBackground(contentPadding = pad) {
             Column(
                 Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
+                HeroHeader(
+                    title = "Вопрос",
+                    subtitle = if (q != null) "Раунд ${q.index + 1} из ${q.total}" else "Ожидание ведущего"
+                )
+
                 if (q == null) {
                     NeonCard(Modifier.fillMaxWidth()) {
                         Text("Ждём вопрос...", style = MaterialTheme.typography.titleMedium)
@@ -72,8 +112,19 @@ fun GameScreen(vm: QuizViewModel, nav: NavController) {
                 }
 
                 NeonCard(Modifier.fillMaxWidth()) {
-                    Text("Вопрос ${q.index + 1} / ${q.total}")
-                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        StatPill(text = "Вопрос ${q.index + 1}/${q.total}")
+                        if (q.durationMs > 0L) {
+                            StatPill(text = "⏱ ${(remaining / 1000L).coerceAtLeast(0L)} сек")
+                        } else {
+                            StatPill(text = "Без таймера")
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
                     if (q.durationMs > 0L) {
                         LinearProgressIndicator(
                             progress = {
@@ -81,18 +132,36 @@ fun GameScreen(vm: QuizViewModel, nav: NavController) {
                             },
                             modifier = Modifier.fillMaxWidth()
                         )
-                        Spacer(Modifier.height(6.dp))
-                        Text("Осталось: ${(remaining / 1000L).coerceAtLeast(0L)} сек")
-                    } else {
-                        Text("Ожидаем ведущего", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(10.dp))
                     }
-                    Spacer(Modifier.height(8.dp))
                     Text(q.text, style = MaterialTheme.typography.titleLarge)
+                    if (q.durationMs > 0L) {
+                        Spacer(Modifier.height(12.dp))
+                        Box(
+                            modifier = Modifier.fillMaxWidth(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            val progress =
+                                (remaining.toFloat() / q.durationMs.toFloat()).coerceIn(0f, 1f)
+                            CircularProgressIndicator(
+                                progress = { progress },
+                                strokeWidth = 6.dp,
+                                modifier = Modifier.height(84.dp)
+                            )
+                            Text(
+                                "${(remaining / 1000L).coerceAtLeast(0L)}",
+                                style = MaterialTheme.typography.titleLarge
+                            )
+                        }
+                    }
                 }
 
                 when (q.kind) {
                     QuestionKind.YESNO -> {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Row(
+                            Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
                             Button(
                                 modifier = Modifier.weight(1f),
                                 enabled = canAnswer,
@@ -110,7 +179,9 @@ fun GameScreen(vm: QuizViewModel, nav: NavController) {
                             OutlinedButton(
                                 enabled = canAnswer,
                                 onClick = { vm.answerIndex(idx) },
-                                modifier = Modifier.fillMaxWidth()
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 50.dp)
                             ) { Text(opt) }
                         }
                     }
@@ -127,7 +198,12 @@ fun GameScreen(vm: QuizViewModel, nav: NavController) {
                     }
                 }
 
-                if (ui.error != null) Text(ui.error!!, color = MaterialTheme.colorScheme.error)
+                if (ui.error != null) {
+                    StatusBanner(
+                        text = ui.error!!,
+                        tone = BannerTone.Error
+                    )
+                }
             }
         }
     }

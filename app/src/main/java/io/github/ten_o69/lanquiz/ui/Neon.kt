@@ -1,12 +1,14 @@
 package io.github.ten_o69.lanquiz.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
@@ -24,29 +26,53 @@ fun NeonBackground(
     content: @Composable () -> Unit
 ) {
     val bg = MaterialTheme.colorScheme.background
+    val primary = MaterialTheme.colorScheme.primary
+    val secondary = MaterialTheme.colorScheme.secondary
     val isDark = bg.luminance() < 0.5f
-    val gradient = if (isDark) {
+    val baseGradient = if (isDark) {
         Brush.radialGradient(
             colors = listOf(
-                Color(0xFF1B2B4B),
-                Color(0xFF0B1020)
+                bg,
+                Color(0xFF0B1122)
             ),
             radius = 1200f
         )
     } else {
         Brush.linearGradient(
             colors = listOf(
-                Color(0xFFEAF3FF),
-                Color(0xFFDCE7FF)
+                bg,
+                Color(0xFFE3ECFF)
             )
         )
     }
     Box(
         modifier = modifier
             .fillMaxSize()
-            .background(gradient)
+            .background(baseGradient)
             .padding(contentPadding)
     ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(primary.copy(alpha = 0.18f), Color.Transparent),
+                        radius = 700f,
+                        center = androidx.compose.ui.geometry.Offset(200f, 200f)
+                    )
+                )
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(secondary.copy(alpha = 0.12f), Color.Transparent),
+                        radius = 900f,
+                        center = androidx.compose.ui.geometry.Offset(900f, 400f)
+                    )
+                )
+        )
         content()
     }
 }
@@ -58,11 +84,21 @@ fun NeonCard(
 ) {
     Card(
         modifier = modifier,
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
         ),
         elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
     ) {
-        Column(modifier = Modifier.padding(16.dp), content = content)
+        Column(
+            modifier = Modifier
+                .border(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                    shape = RoundedCornerShape(20.dp)
+                )
+                .padding(16.dp),
+            content = content
+        )
     }
 }
