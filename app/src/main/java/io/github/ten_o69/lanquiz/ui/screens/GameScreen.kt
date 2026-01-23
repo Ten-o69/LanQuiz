@@ -5,10 +5,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.BottomAppBar
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -143,15 +145,20 @@ fun GameScreen(vm: QuizViewModel, nav: NavController) {
                         ) {
                             val progress =
                                 (remaining.toFloat() / q.durationMs.toFloat()).coerceIn(0f, 1f)
-                            CircularProgressIndicator(
-                                progress = { progress },
-                                strokeWidth = 6.dp,
-                                modifier = Modifier.height(84.dp)
-                            )
-                            Text(
-                                "${(remaining / 1000L).coerceAtLeast(0L)}",
-                                style = MaterialTheme.typography.titleLarge
-                            )
+                            Box(
+                                modifier = Modifier.size(96.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(
+                                    progress = { progress },
+                                    strokeWidth = 6.dp,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                Text(
+                                    "${(remaining / 1000L).coerceAtLeast(0L)}",
+                                    style = MaterialTheme.typography.titleLarge
+                                )
+                            }
                         }
                     }
                 }
