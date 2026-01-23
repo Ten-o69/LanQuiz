@@ -76,7 +76,17 @@ class QuizServer(
     }
 
     fun stop() {
-        cancelGame("Сервер остановлен")
+        stop("Сервер остановлен")
+    }
+
+    fun stop(reason: String) {
+        gameJob?.cancel()
+        gameJob = null
+        questionTimerJob?.cancel()
+        questionTimerJob = null
+        runBlocking { cancelGameInternal(reason) }
+        closeAllSessions(reason)
+        clearSessionState()
         nsd.unregister()
         scope.cancel()
         runCatching { engine?.stop(500, 1500) }
@@ -145,25 +155,7 @@ class QuizServer(
         questionTimerJob?.cancel()
         questionTimerJob = null
 
-        scope.launch {
-            mutex.withLock {
-                acceptingAnswersFor = -1
-                answers.clear()
-                questionStartedAtMs = 0L
-                questionDurationMs = 0L
-                questionRevealed = false
-                currentIndex = -1
-                lastReveal = null
-                gameInProgress = false
-                gameFinished = false
-                lastScoreboard = emptyList()
-            }
-            resetScores()
-            broadcast(WsMsg.GameCancelled(reason))
-            onHostEvent(HostEvent.GameCancelled(reason))
-            dropDisconnectedPlayers()
-            broadcastPlayers()
-        }
+        scope.launch { cancelGameInternal(reason) }
     }
 
     fun hostNext() {
@@ -267,6 +259,7 @@ class QuizServer(
             lastScoreboard = final
             gameInProgress = false
             gameFinished = true
+            questions = emptyList()
         }
         questionTimerJob?.cancel()
         questionTimerJob = null
@@ -524,6 +517,60 @@ class QuizServer(
     }
 
     private fun pickFreePort(): Int = ServerSocket(0).use { it.localPort }
+
+    private suspend fun cancelGameInternal(reason: String) {
+        mutex.withLock {
+            acceptingAnswersFor = -1
+            answers.clear()
+            questionStartedAtMs = 0L
+            questionDurationMs = 0L
+            questionRevealed = false
+            currentIndex = -1
+            lastReveal = null
+            gameInProgress = false
+            gameFinished = false
+            lastScoreboard = emptyList()
+            questions = emptyList()
+        }
+        resetScores()
+        broadcast(WsMsg.GameCancelled(reason))
+        onHostEvent(HostEvent.GameCancelled(reason))
+        dropDisconnectedPlayers()
+        broadcastPlayers()
+    }
+
+    private fun closeAllSessions(reason: String) {
+        runBlocking {
+            val snapshot = mutex.withLock { sessions.values.toList() }
+            snapshot.forEach {
+                runCatching { it.close(CloseReason(CloseReason.Codes.NORMAL, reason)) }
+            }
+        }
+    }
+
+    private fun clearSessionState() {
+        runBlocking {
+            mutex.withLock {
+                sessions.clear()
+                sessionByPlayerId.clear()
+                players.clear()
+                score.clear()
+                answers.clear()
+                acceptingAnswersFor = -1
+                questionStartedAtMs = 0L
+                questionDurationMs = 0L
+                questionRevealed = false
+                currentIndex = -1
+                lastReveal = null
+                gameInProgress = false
+                gameFinished = false
+                lastScoreboard = emptyList()
+                questions = emptyList()
+                roomCode = ""
+                password = null
+            }
+        }
+    }
 }
 
 private data class GameSnapshot(

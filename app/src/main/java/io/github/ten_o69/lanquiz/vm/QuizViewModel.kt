@@ -72,6 +72,8 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
     private var server: QuizServer? = null
     private var client: QuizClient? = null
     private var discoveryJob: Job? = null
+    private var hostEventsEnabled = true
+    private var allowClientErrors = true
 
     private val undoStack = ArrayDeque<UndoEntry>()
     val canUndo = MutableStateFlow(false)
@@ -163,6 +165,11 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun clearQuestions() {
+        pushUndo(UndoEffect.None)
+        _ui.value = _ui.value.copy(questions = emptyList(), error = null)
+    }
+
     // HOST
     fun startHosting() {
         val state = _ui.value
@@ -176,7 +183,9 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
 
         _ui.value = state.copy(role = AppRole.HOST, stage = AppStage.LOBBY, players = emptyList(), error = null)
 
-        server = QuizServer(nsd) { evt ->
+        hostEventsEnabled = true
+        server = QuizServer(nsd) host@ { evt ->
+            if (!hostEventsEnabled) return@host
             when (evt) {
                 is HostEvent.RoomStarted ->
                     _ui.value = _ui.value.copy(hostServiceName = evt.serviceName, hostPort = evt.port)
@@ -199,6 +208,7 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
                 is HostEvent.GameCancelled -> {
                     _ui.value = _ui.value.copy(
                         stage = AppStage.LOBBY,
+                        questions = emptyList(),
                         currentQuestion = null,
                         lastReveal = null,
                         scoreboard = emptyList(),
@@ -217,7 +227,15 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
                 }
 
                 is HostEvent.GameOver -> {
-                    _ui.value = _ui.value.copy(stage = AppStage.RESULTS, scoreboard = evt.scoreboard)
+                    _ui.value = _ui.value.copy(
+                        stage = AppStage.RESULTS,
+                        questions = emptyList(),
+                        currentQuestion = null,
+                        lastReveal = null,
+                        answeredForIndex = null,
+                        answeredPayload = null,
+                        scoreboard = evt.scoreboard
+                    )
                 }
 
                 else -> {}
@@ -242,8 +260,9 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
 
     fun hostCancelGame() {
         pushUndo(UndoEffect.None)
-        server?.cancelGame("Отменено ведущим")
-        _ui.value = _ui.value.copy(stage = AppStage.LOBBY)
+        hostEventsEnabled = false
+        stopAllInternal(clearUndo = true, serverStopReason = "Отменено ведущим")
+        resetSessionState(clearQuestions = true)
     }
 
     fun hostNext() {
@@ -276,6 +295,7 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun connectClient(host: String, port: Int) {
         val state = _ui.value
+        allowClientErrors = true
         client = QuizClient { evt ->
             when (evt) {
                 is ClientEvent.Joined -> {
@@ -291,15 +311,10 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
                 is ClientEvent.GameStarted -> _ui.value = _ui.value.copy(stage = AppStage.GAME, error = null)
 
                 is ClientEvent.GameCancelled -> {
-                    _ui.value = _ui.value.copy(
-                        stage = AppStage.LOBBY,
-                        currentQuestion = null,
-                        lastReveal = null,
-                        scoreboard = emptyList(),
-                        answeredForIndex = null,
-                        answeredPayload = null,
-                        error = evt.reason
-                    )
+                    if (_ui.value.stage != AppStage.HOME) {
+                        stopAllInternal(clearUndo = true)
+                        resetSessionState(clearQuestions = false)
+                    }
                 }
 
                 is ClientEvent.Question -> _ui.value = _ui.value.copy(
@@ -310,8 +325,19 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
                     answeredPayload = null
                 )
                 is ClientEvent.Reveal -> _ui.value = _ui.value.copy(lastReveal = evt.r, scoreboard = evt.r.scoreboard)
-                is ClientEvent.GameOver -> _ui.value = _ui.value.copy(stage = AppStage.RESULTS, scoreboard = evt.scoreboard)
-                is ClientEvent.Error -> _ui.value = _ui.value.copy(error = evt.message)
+                is ClientEvent.GameOver -> _ui.value = _ui.value.copy(
+                    stage = AppStage.RESULTS,
+                    currentQuestion = null,
+                    lastReveal = null,
+                    answeredForIndex = null,
+                    answeredPayload = null,
+                    scoreboard = evt.scoreboard
+                )
+                is ClientEvent.Error -> {
+                    if (allowClientErrors) {
+                        _ui.value = _ui.value.copy(error = evt.message)
+                    }
+                }
             }
         }.also {
             it.connect(host, port, state.roomCode, state.nickname, state.password.takeIf { p -> p.isNotBlank() })
@@ -344,13 +370,22 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopAll() {
         pushUndo(UndoEffect.None)
-        stopAllInternal(clearUndo = false)
-        _ui.value = _ui.value.copy(role = AppRole.NONE, stage = AppStage.HOME)
+        hostEventsEnabled = false
+        stopAllInternal(clearUndo = true, serverStopReason = "Сессия завершена")
+        resetSessionState(clearQuestions = true)
     }
 
-    private fun stopAllInternal(clearUndo: Boolean) {
+    private fun stopAllInternal(clearUndo: Boolean, serverStopReason: String? = null) {
         discoveryJob?.cancel(); discoveryJob = null
-        runCatching { server?.stop() }
+        allowClientErrors = false
+        if (server != null) {
+            hostEventsEnabled = false
+        }
+        if (serverStopReason != null) {
+            runCatching { server?.stop(serverStopReason) }
+        } else {
+            runCatching { server?.stop() }
+        }
         server = null
         runCatching { client?.close() }
         client = null
@@ -362,12 +397,35 @@ class QuizViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun stopClientOnly(clearUndo: Boolean) {
         discoveryJob?.cancel(); discoveryJob = null
+        allowClientErrors = false
         runCatching { client?.close() }
         client = null
         if (clearUndo) {
             undoStack.clear()
             canUndo.value = false
         }
+    }
+
+    private fun resetSessionState(clearQuestions: Boolean) {
+        val state = _ui.value
+        _ui.value = state.copy(
+            role = AppRole.NONE,
+            stage = AppStage.HOME,
+            roomCode = randomCode(),
+            password = "",
+            questions = if (clearQuestions) emptyList() else state.questions,
+            players = emptyList(),
+            currentQuestion = null,
+            lastReveal = null,
+            scoreboard = emptyList(),
+            answeredForIndex = null,
+            answeredPayload = null,
+            hostServiceName = null,
+            hostPort = null,
+            resolvedHost = null,
+            resolvedPort = null,
+            error = null
+        )
     }
 }
 
