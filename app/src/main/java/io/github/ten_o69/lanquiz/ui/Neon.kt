@@ -85,19 +85,16 @@ fun NeonCard(
     Card(
         modifier = modifier,
         shape = RoundedCornerShape(20.dp),
+
+        // ❌ полностью убираем тени
+        elevation = CardDefaults.cardElevation(0.dp),
+
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f)
-        ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 6.dp)
+            containerColor = MaterialTheme.colorScheme.surface
+        )
     ) {
         Column(
-            modifier = Modifier
-                .border(
-                    width = 1.dp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
-                    shape = RoundedCornerShape(20.dp)
-                )
-                .padding(16.dp),
+            modifier = Modifier.padding(16.dp),
             content = content
         )
     }
